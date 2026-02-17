@@ -1,262 +1,198 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:gap/gap.dart';
 import 'package:go_deep_or_go_home/models/expedition.dart';
-import 'package:go_deep_or_go_home/models/resources.dart';
 import 'package:go_deep_or_go_home/providers/game_provider.dart';
-import 'package:go_deep_or_go_home/ui/theme/app_theme.dart';
-import 'package:go_deep_or_go_home/ui/widgets/adventurer_card.dart';
+import 'package:google_fonts/google_fonts.dart';
 
-class ExpeditionScreen extends ConsumerStatefulWidget {
-  const ExpeditionScreen({super.key});
+class ExpeditionScreen extends ConsumerWidget {
+  final String expeditionId;
 
-  @override
-  ConsumerState<ExpeditionScreen> createState() => _ExpeditionScreenState();
-}
-
-class _ExpeditionScreenState extends ConsumerState<ExpeditionScreen> {
-  Timer? _timer;
-  double _localProgress = 0.0;
-  List<String> _localLog = [];
-  bool _processingEvent = false;
+  const ExpeditionScreen({super.key, required this.expeditionId});
 
   @override
-  void initState() {
-    super.initState();
-    _startTimer();
-  }
+  Widget build(BuildContext context, WidgetRef ref) {
+    final gameData = ref.watch(gameProvider);
 
-  void _startTimer() {
-    _timer?.cancel();
-    _timer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
-      if (!mounted) return;
-      if (_processingEvent) return;
+    // Find our expedition safely
+    Expedition? safeExpedition;
+    try {
+      safeExpedition = gameData.activeExpeditions.firstWhere(
+        (e) => e.id == expeditionId,
+      );
+    } catch (e) {
+      safeExpedition = null;
+    }
 
-      final expedition = ref.read(gameProvider).currentExpedition;
-      if (expedition == null) {
-        timer.cancel();
-        return;
-      }
-
-      setState(() {
-        _localProgress += 0.02; // 5 seconds
-        if (_localProgress >= 1.0) {
-          _localProgress = 0.0;
-          _processingEvent = true;
-          _triggerEvent();
-        }
-      });
-    });
-  }
-
-  Future<void> _triggerEvent() async {
-    _timer?.cancel();
-
-    // Call Game Logic
-    final result = await ref.read(gameProvider.notifier).resolveDepthSegment();
-    if (!mounted) return;
-
-    final String letterBody = result['letter'] as String;
-    final List<String> logs = result['logs'] as List<String>;
-    final Resources loot = result['loot'] as Resources;
-    final bool isInjured = result['isInjured'] as bool;
-
-    setState(() {
-      _localLog.addAll(logs);
-    });
-
-    // Show Dialog
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: AppTheme.organicBrown,
-          title: Text(
-            'A Letter Arrives',
-            style: Theme.of(
-              context,
-            ).textTheme.displayLarge?.copyWith(fontSize: 24),
+    if (safeExpedition == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text("Expedition Finished")),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Text("This expedition has concluded."),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text("Return to Camp"),
+              ),
+            ],
           ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  letterBody,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyLarge?.copyWith(fontStyle: FontStyle.italic),
-                ),
-                const Gap(16),
-                const Divider(color: AppTheme.organicFlesh),
-                const Gap(8),
-                Text('Events:', style: Theme.of(context).textTheme.labelLarge),
-                ...logs.map(
-                  (l) => Text(
-                    l,
-                    style: Theme.of(context).textTheme.bodySmall,
-                    textAlign: TextAlign.center,
-                  ),
-                ),
-                const Gap(8),
-                if (loot.coin > 0 || loot.metal > 0) ...[
+        ),
+      );
+    }
+
+    // Identify party members
+    final partyMembers = gameData.roster
+        .where((a) => safeExpedition!.adventurerIds.contains(a.id))
+        .toList();
+
+    return Scaffold(
+      backgroundColor: Colors.black87, // Dark atmosphere
+      appBar: AppBar(
+        title: Text(
+          "Expedition: ${safeExpedition.locationId.name.toUpperCase()}",
+        ),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.close),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+      ),
+      body: SafeArea(
+        child: Column(
+          children: [
+            // 1. Top Status Bar
+            Container(
+              padding: const EdgeInsets.all(16),
+              color: Colors.black54,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
                   Text(
-                    'Loot Found:',
-                    style: Theme.of(context).textTheme.labelLarge,
-                  ),
-                  Text(
-                    '${loot.coin} Coins, ${loot.metal} Metal',
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: AppTheme.accentGold,
+                    "Depth: ${safeExpedition.currentDepth}",
+                    style: GoogleFonts.cinzel(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
                     ),
+                  ),
+                  // Show Accumulated Loot
+                  Row(
+                    children: [
+                      const Icon(Icons.circle, color: Colors.amber, size: 16),
+                      const SizedBox(width: 4),
+                      Text(
+                        "${safeExpedition.accumulatedLoot.coin}",
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                    ],
                   ),
                 ],
-                if (isInjured)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8.0),
-                    child: Text(
-                      'PARTY INJURED!',
-                      style: Theme.of(
-                        context,
-                      ).textTheme.labelLarge?.copyWith(color: AppTheme.riskRed),
-                    ),
-                  ),
-              ],
+              ),
             ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-                _goDeeper();
-              },
-              child: const Text(
-                'GO DEEPER',
-                style: TextStyle(
-                  color: AppTheme.riskRed,
-                  fontWeight: FontWeight.bold,
+
+            // 2. Visual / Atmosphere (Placeholder)
+            Expanded(
+              flex: 3,
+              child: Container(
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  image: DecorationImage(
+                    image: AssetImage(
+                      'assets/images/locations/${safeExpedition.locationId.name}.png',
+                    ), // Ensure assets exist or fallback
+                    fit: BoxFit.cover,
+                    opacity: 0.5,
+                  ),
+                ),
+                child: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      // Party Display
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: partyMembers.map((member) {
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8.0,
+                            ),
+                            child: Chip(
+                              avatar: CircleAvatar(child: Text(member.name[0])),
+                              label: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(member.name),
+                                  Text(
+                                    "${member.stats.currentHealth}/${member.stats.maxHealth} HP",
+                                    style: const TextStyle(fontSize: 10),
+                                  ),
+                                ],
+                              ),
+                              backgroundColor: member.stats.currentHealth > 0
+                                  ? Colors.white70
+                                  : Colors.red.withOpacity(0.7),
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-                _comeHome();
-              },
-              child: const Text(
-                'COME HOME',
-                style: TextStyle(
-                  color: AppTheme.safeGreen,
-                  fontWeight: FontWeight.bold,
+
+            // 3. Log
+            Expanded(
+              flex: 2,
+              child: Container(
+                color: const Color(0xFF2C2C2C),
+                child: ListView.builder(
+                  reverse: true, // Show newest at bottom
+                  padding: const EdgeInsets.all(16),
+                  itemCount: safeExpedition.log.length,
+                  itemBuilder: (context, index) {
+                    final logEntry = safeExpedition!
+                        .log[safeExpedition.log.length - 1 - index];
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Text(
+                        "> $logEntry",
+                        style: GoogleFonts.vt323(
+                          color: Colors.greenAccent,
+                          fontSize: 16,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+
+            // 4. Controls (Recall?)
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red[900],
+                  ),
+                  onPressed: () {
+                    // Recall Logic
+                    ref
+                        .read(gameProvider.notifier)
+                        .returnExpedition(safeExpedition!.id);
+                    Navigator.of(context).pop();
+                  },
+                  child: const Text("Recall Party (End Expedition)"),
                 ),
               ),
             ),
           ],
-        );
-      },
-    );
-  }
-
-  void _goDeeper() {
-    final expedition = ref.read(gameProvider).currentExpedition;
-    if (expedition != null) {
-      ref
-          .read(gameProvider.notifier)
-          .updateExpedition(
-            expedition.copyWith(currentDepth: expedition.currentDepth + 1),
-          );
-      setState(() {
-        _processingEvent = false;
-        _localLog.add('Descended to Depth ${expedition.currentDepth + 1}');
-      });
-      _startTimer();
-    }
-  }
-
-  void _comeHome() {
-    ref
-        .read(gameProvider.notifier)
-        .endExpedition(success: true); // Logic handles loot banking
-    Navigator.pop(context); // Go back to Guildhall
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final expedition = ref.watch(
-      gameProvider.select((s) => s.currentExpedition),
-    );
-    final party = ref.watch(gameProvider.select((s) => s.currentParty));
-    final roster = ref.watch(gameProvider.select((s) => s.roster));
-
-    if (expedition == null || party == null) {
-      return const Scaffold(body: Center(child: Text("No Active Expedition")));
-    }
-
-    final partyMembers = roster
-        .where((a) => party.adventurerIds.contains(a.id))
-        .toList();
-
-    return Scaffold(
-      appBar: AppBar(
-        title: Text('Depth ${expedition.currentDepth}'),
-        backgroundColor: AppTheme.backgroundBlack,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text("Cannot leave without a Letter!")),
-            );
-          },
         ),
-      ),
-      body: Column(
-        children: [
-          LinearProgressIndicator(
-            value: _localProgress,
-            backgroundColor: AppTheme.organicDarkGreen,
-            color: AppTheme.accentGold,
-            minHeight: 10,
-          ),
-          const Gap(16),
-          Expanded(
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              itemCount: partyMembers.length,
-              itemBuilder: (context, index) {
-                return Container(
-                  width: 150,
-                  padding: const EdgeInsets.all(8),
-                  child: AdventurerCard(
-                    adventurer: partyMembers[index],
-                    enableAction: false,
-                    actionLabel: '',
-                  ),
-                );
-              },
-            ),
-          ),
-          Container(
-            height: 200,
-            color: Colors.black54,
-            padding: const EdgeInsets.all(8),
-            child: ListView(
-              children: _localLog
-                  .map(
-                    (l) =>
-                        Text(l, style: const TextStyle(color: Colors.white70)),
-                  )
-                  .toList(),
-            ),
-          ),
-        ],
       ),
     );
   }

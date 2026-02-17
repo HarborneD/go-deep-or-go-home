@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gap/gap.dart';
-import 'package:go_deep_or_go_home/models/resources.dart';
 import 'package:go_deep_or_go_home/providers/game_provider.dart';
 import 'package:go_deep_or_go_home/ui/theme/app_theme.dart';
 

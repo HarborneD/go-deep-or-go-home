@@ -5,9 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 /// Can be seeded for deterministic behavior (e.g., daily runs).
 class RngService {
   final Random _random;
-  final int? _seed;
 
-  RngService(this._seed) : _random = Random(_seed);
+  RngService(int? seed) : _random = Random(seed);
 
   /// Returns a random integer between 0 (inclusive) and [max] (exclusive).
   int nextInt(int max) => _random.nextInt(max);

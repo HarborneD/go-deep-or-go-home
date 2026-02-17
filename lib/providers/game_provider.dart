@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_deep_or_go_home/gen/character_generator.dart';
 import 'package:go_deep_or_go_home/gen/narrative_generator.dart';
 import 'package:go_deep_or_go_home/models/adventurer.dart';
 import 'package:go_deep_or_go_home/models/expedition.dart';
@@ -12,14 +11,28 @@ import 'package:go_deep_or_go_home/providers/providers.dart';
 import 'package:go_deep_or_go_home/services/rng_service.dart';
 import 'package:go_deep_or_go_home/services/storage_service.dart';
 
+import 'dart:async'; // Add this
+
 class GameNotifier extends Notifier<GameData> {
   static const String _storageKey = 'game_data';
   late StorageService _storage;
+  Timer? _timer;
 
   @override
   GameData build() {
     _storage = ref.watch(storageServiceProvider);
     _load();
+
+    // Start background loop
+    _timer?.cancel();
+    _timer = Timer.periodic(const Duration(seconds: 2), (_) {
+      processExpeditions();
+    });
+
+    ref.onDispose(() {
+      _timer?.cancel();
+    });
+
     return const GameData();
   }
 
@@ -103,75 +116,136 @@ class GameNotifier extends Notifier<GameData> {
       return a;
     }).toList();
 
+    final newExpedition = Expedition(
+      partyId: state.currentParty!.id,
+      adventurerIds: state.currentParty!.adventurerIds,
+      locationId: locationId,
+      startTime: DateTime.now(),
+    );
+
     state = state.copyWith(
       roster: updatedRoster,
-      currentExpedition: Expedition(
-        partyId: state.currentParty!.id,
-        locationId: locationId,
-      ),
+      activeExpeditions: [...state.activeExpeditions, newExpedition],
+      currentParty: null, // Clear selection after processing
     );
     _save();
   }
 
-  void updateExpedition(Expedition expedition) {
-    state = state.copyWith(currentExpedition: expedition);
-    _save();
-  }
-
-  // Core Game Loop Logic
-  Future<Map<String, dynamic>> resolveDepthSegment() async {
-    final expedition = state.currentExpedition;
-    if (expedition == null) return {};
+  // Called periodically to progress all active expeditions
+  Future<void> processExpeditions() async {
+    if (state.activeExpeditions.isEmpty) return;
 
     final rng = ref.read(rngServiceProvider);
     final narrative = ref.read(narrativeGeneratorProvider);
-    final partyIds = state.currentParty!.adventurerIds;
-    final partyMembers = state.roster
-        .where((a) => partyIds.contains(a.id))
+
+    List<Expedition> updatedExpeditions = [];
+    List<Adventurer> updatedRoster = [...state.roster];
+    bool stateChanged = false;
+
+    for (final expedition in state.activeExpeditions) {
+      if (expedition.status != ExpeditionStatus.active) {
+        updatedExpeditions.add(expedition);
+        continue;
+      }
+
+      // Simple progression: 20% chance per tick to trigger an event/step
+      if (rng.nextInt(100) < 20) {
+        final result = _processExpeditionStep(
+          expedition,
+          updatedRoster,
+          rng,
+          narrative,
+        );
+        updatedExpeditions.add(result.expedition);
+        updatedRoster = result.roster;
+        stateChanged = true;
+      } else {
+        updatedExpeditions.add(expedition);
+      }
+    }
+
+    if (stateChanged) {
+      state = state.copyWith(
+        activeExpeditions: updatedExpeditions,
+        roster: updatedRoster,
+      );
+      _save();
+    }
+  }
+
+  ({Expedition expedition, List<Adventurer> roster}) _processExpeditionStep(
+    Expedition expedition,
+    List<Adventurer> roster,
+    RngService rng,
+    NarrativeGenerator narrative,
+  ) {
+    final partyMembers = roster
+        .where((a) => expedition.adventurerIds.contains(a.id))
         .toList();
 
+    // If party is dead, mark failed
+    if (partyMembers.every((a) => a.stats.currentHealth <= 0)) {
+      return (
+        expedition: expedition.copyWith(status: ExpeditionStatus.failed),
+        roster: roster,
+      );
+    }
+
     // 1. Calculate Stats
-    int totalSpeed = partyMembers.fold(0, (sum, a) => sum + a.stats.speed);
-    int totalPower = partyMembers.fold(0, (sum, a) => sum + a.stats.power);
-    int totalDodge = partyMembers.fold(0, (sum, a) => sum + a.stats.dodge);
-    int avgSpeed = (totalSpeed / partyMembers.length).round();
+    int totalPower = partyMembers.fold(
+      0,
+      (sum, a) => sum + (a.status != AdventurerStatus.dead ? a.stats.power : 0),
+    );
+    int totalDodge = partyMembers.fold(
+      0,
+      (sum, a) => sum + (a.status != AdventurerStatus.dead ? a.stats.dodge : 0),
+    );
 
     // 2. Determine Event
-    // Simple logic: Threat vs Power
     final depth = expedition.currentDepth;
-    // Location base threat
-    final location = Location(
-      id: expedition.locationId,
-      name: 'Location',
-      description: '...',
-      baseThreat: expedition.locationId == LocationId.caves ? 5 : 10,
-    ); // Stub
+    // Location base threat (Stub)
+    final baseThreat = expedition.locationId == LocationId.caves ? 5 : 10;
 
-    double threat = location.baseThreat + 0.6 * depth + 0.12 * (depth * depth);
+    double threat = baseThreat + 0.6 * depth + 0.12 * (depth * depth);
     double partyStrength = totalPower + (totalDodge * 0.5);
 
     bool isSuccess = partyStrength + rng.nextInt(20) > threat;
-    bool isInjured = false;
+    // bool isInjured = false;
     List<String> logs = [];
+
+    List<Adventurer> nextRoster = [...roster];
 
     // 3. Resolve Outcome
     if (!isSuccess) {
       // Damage
-      final victim = rng.pickOne(partyMembers);
-      final damage = (threat * 0.5).round().clamp(1, 20);
+      final livingMembers = partyMembers
+          .where((a) => a.status != AdventurerStatus.dead)
+          .toList();
+      if (livingMembers.isNotEmpty) {
+        final victim = rng.pickOne(livingMembers);
+        final damage = (threat * 0.5).round().clamp(1, 20);
+        final newHealth = victim.stats.currentHealth - damage;
 
-      final newHealth = victim.stats.currentHealth - damage;
-      // Update roster
-      final updatedRoster = state.roster.map((a) {
-        if (a.id == victim.id) {
-          return a.copyWith(stats: a.stats.copyWith(currentHealth: newHealth));
+        // Update roster
+        nextRoster = nextRoster.map((a) {
+          if (a.id == victim.id) {
+            final newStatus = newHealth <= 0
+                ? AdventurerStatus.dead
+                : AdventurerStatus.expedition;
+            return a.copyWith(
+              status: newStatus,
+              stats: a.stats.copyWith(currentHealth: newHealth),
+            );
+          }
+          return a;
+        }).toList();
+
+        // isInjured = true;
+        logs.add('${victim.name} took $damage damage!');
+        if (newHealth <= 0) {
+          logs.add('${victim.name} has fallen!');
         }
-        return a;
-      }).toList();
-      state = state.copyWith(roster: updatedRoster);
-
-      isInjured = true;
-      logs.add('${victim.name} took $damage damage!');
+      }
     } else {
       logs.add('The party advanced safely.');
     }
@@ -181,39 +255,38 @@ class GameNotifier extends Notifier<GameData> {
     int coinFound = rng.nextInt(10 * lootMult);
     int materialFound = rng.nextInt(5 * lootMult);
 
-    Resources loot = Resources(
-      coin: coinFound,
-      metal: materialFound,
-    ); // Simplified
-
+    Resources loot = Resources(coin: coinFound, metal: materialFound);
     final newAccumulated = expedition.accumulatedLoot + loot;
+
+    // 5. Letter/Progression
+    final nextDepth = expedition.currentDepth + 1;
 
     // Update Expedition
     final updatedExpedition = expedition.copyWith(
+      currentDepth: nextDepth,
       accumulatedLoot: newAccumulated,
       log: [...expedition.log, ...logs],
     );
-    state = state.copyWith(currentExpedition: updatedExpedition);
-    _save();
 
-    // 5. Generate Letter
-    final letterBody = narrative.generateLetterBody(
-      expedition.locationId,
-      depth,
-      isInjured,
-    );
-
-    return {
-      'letter': letterBody,
-      'logs': logs,
-      'loot': loot,
-      'isInjured': isInjured,
-    };
+    return (expedition: updatedExpedition, roster: nextRoster);
   }
 
-  void endExpedition({required bool success}) {
-    final expedition = state.currentExpedition;
-    if (expedition == null) return; // Should not happen
+  void returnExpedition(String expeditionId) {
+    final expedition = state.activeExpeditions.firstWhere(
+      (e) => e.id == expeditionId,
+      orElse: () => throw Exception("Expedition not found"),
+    );
+    // If it's already failed, we just dismiss/end it as failed.
+    // If it is active, we treat it as a safe return.
+    final isSuccess = expedition.status != ExpeditionStatus.failed;
+    endExpedition(expeditionId: expeditionId, success: isSuccess);
+  }
+
+  void endExpedition({required String expeditionId, required bool success}) {
+    final expedition = state.activeExpeditions.firstWhere(
+      (e) => e.id == expeditionId,
+      orElse: () => throw Exception("Expedition not found"),
+    );
 
     final loot = expedition.accumulatedLoot;
     if (success) {
@@ -221,9 +294,7 @@ class GameNotifier extends Notifier<GameData> {
     }
 
     final updatedRoster = state.roster.map((a) {
-      // Heal logic? Or stay injured?
-      // For prototype, restore some health if returning safely?
-      if (state.currentParty!.adventurerIds.contains(a.id)) {
+      if (expedition.adventurerIds.contains(a.id)) {
         if (a.status != AdventurerStatus.dead) {
           return a.copyWith(status: AdventurerStatus.idle);
         }
@@ -231,7 +302,34 @@ class GameNotifier extends Notifier<GameData> {
       return a;
     }).toList();
 
-    state = state.copyWith(roster: updatedRoster, currentExpedition: null);
+    // Mark as completed/failed
+    final finalExpedition = expedition.copyWith(
+      status: success ? ExpeditionStatus.completed : ExpeditionStatus.failed,
+      log: [
+        ...expedition.log,
+        success ? "Expedition Returned Safely." : "Expedition Ended.",
+      ],
+    );
+    print(
+      "DEBUG: Ending Expedition ${expedition.id}. Status: ${finalExpedition.status}",
+    );
+
+    state = state.copyWith(
+      roster: updatedRoster,
+      activeExpeditions: state.activeExpeditions
+          .where((e) => e.id != expeditionId)
+          .toList(),
+      completedExpeditions: [...state.completedExpeditions, finalExpedition],
+    );
+    _save();
+  }
+
+  void dismissCompletedExpedition(String expeditionId) {
+    state = state.copyWith(
+      completedExpeditions: state.completedExpeditions
+          .where((e) => e.id != expeditionId)
+          .toList(),
+    );
     _save();
   }
 

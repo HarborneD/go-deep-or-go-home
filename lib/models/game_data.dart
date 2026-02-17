@@ -11,18 +11,22 @@ part 'game_data.g.dart';
 class GameData {
   final Resources resources;
   final List<Adventurer> roster;
+  // currentParty is now just for the UI selection state before embarking
   final Party? currentParty;
-  final Expedition? currentExpedition;
+  // List of active expeditions
+  final List<Expedition> activeExpeditions;
+  final List<Expedition> completedExpeditions;
   final List<LocationId> unlockedLocations;
   final int guildhallLevel;
   final List<Adventurer> availableRecruits;
   final DateTime? lastSaveTime;
 
   const GameData({
-    this.resources = const Resources(),
+    this.resources = const Resources(coin: 300),
     this.roster = const [],
     this.currentParty,
-    this.currentExpedition,
+    this.activeExpeditions = const [],
+    this.completedExpeditions = const [],
     this.unlockedLocations = const [LocationId.caves, LocationId.castleRuins],
     this.guildhallLevel = 1,
     this.availableRecruits = const [],
@@ -33,7 +37,8 @@ class GameData {
     Resources? resources,
     List<Adventurer>? roster,
     Party? currentParty,
-    Expedition? currentExpedition,
+    List<Expedition>? activeExpeditions,
+    List<Expedition>? completedExpeditions,
     List<LocationId>? unlockedLocations,
     int? guildhallLevel,
     List<Adventurer>? availableRecruits,
@@ -43,7 +48,8 @@ class GameData {
       resources: resources ?? this.resources,
       roster: roster ?? this.roster,
       currentParty: currentParty ?? this.currentParty,
-      currentExpedition: currentExpedition ?? this.currentExpedition,
+      activeExpeditions: activeExpeditions ?? this.activeExpeditions,
+      completedExpeditions: completedExpeditions ?? this.completedExpeditions,
       unlockedLocations: unlockedLocations ?? this.unlockedLocations,
       guildhallLevel: guildhallLevel ?? this.guildhallLevel,
       availableRecruits: availableRecruits ?? this.availableRecruits,
